@@ -1,4 +1,4 @@
-# Multi-objective Stochastic Linear Bandits
+# Multi-objective Stochastic Contextual Bandits
 
 The repository contains: 
 - <code>oracle.py</code> to generate the environment for bandit problems with linear context;
