@@ -6,16 +6,16 @@ from utils import fast_non_dominated_sorting, pc_non_dominated_sorting, par_domi
 
 from pprint import pprint
 
-class env_moslb:
+class mo_contextual_bandit: 
     def __init__(
         self, 
         num_obj:int, 
         num_dim:int, 
-        noise:any=np.random.normal, 
-        R:int=1
+        noise:any= np.random.normal, 
+        R:int= 1
     ) -> None:
         """
-        Environment for multi-objective stochastic linear bandits
+        Environment for multi-objective stochastic contextual bandits
 
         Parameters
         ----------
@@ -24,9 +24,9 @@ class env_moslb:
         num_dim : int
             number of dimension of the arms' context
         noise : any, optional
-            R-sub-Gaussian noise for reward, by default np.random.normal
+            R-sub-Gaussian noise for reward, by default normal distribution
         R : int, optional
-            parameter in noise, by default 1
+            variance proxy in subGaussian, by default 1
         """
         self.m = num_obj
         self.d = num_dim
@@ -48,6 +48,60 @@ class env_moslb:
     @property
     def get_arms(self) -> np.ndarray: 
         return self.A
+    
+    def observe_context(self) -> np.ndarray: 
+        """
+        Output the arms' context at round $t$
+        """
+        raise NotImplementedError("Subclasses should implement this method.")
+    
+    def get_reward(self, arm:np.ndarray) -> float: 
+
+        return self.expected_reward(arm) + self.noise(0,self.R,(self.m,))
+    
+    def expected_reward(self, arm:np.ndarray) -> np.ndarray: 
+        """
+        Method to evaluate the unknown reward function
+        """
+        raise NotImplementedError("Subclasses should implement this method.")
+
+
+
+class simulator_moslb(mo_contextual_bandit):
+    def __init__(
+        self, 
+        num_obj:int, 
+        num_dim:int, 
+        noise:any= np.random.normal, 
+        R:int= 1,
+        vary_context:bool= False
+    ) -> None:
+        """
+        Environment for multi-objective stochastic linear bandits
+
+        Parameters
+        ----------
+        num_obj : int
+            number of objectives 
+        num_dim : int
+            number of dimension of the arms' context
+        noise : any, optional
+            R-sub-Gaussian noise for reward, by default np.random.normal
+        R : int, optional
+            parameter in noise, by default 1
+        vary_context : bool, optional
+            whether the contexts at each round are fixed or not
+        """
+        super().__init__(num_obj,num_dim,noise,R)
+        self.vary_context = vary_context
+
+    @property
+    def get_optimal_arms(self) -> np.ndarray: 
+        return self.opt_ind
+    
+    @property
+    def get_expected_rewards(self) -> np.ndarray: 
+        return self.y
 
     def _sample_theta(self) -> None: 
         """
@@ -77,19 +131,20 @@ class env_moslb:
             rad = np.random.uniform() ** (1 / self.d)
             self.A[i] = rad * point
 
-    def _expected_reward(self) -> None: 
+    def expected_reward(self, arm:np.ndarray) -> np.ndarray: 
         """
-        Evaluate the expected loss for the arms.
+        Evaluate the expected reward by the linear model
         """
-        self.y = np.matmul(self.A, self.th.T)
+        assert arm.ndim == 1
+        return np.dot(arm, self.th.T)
 
     def _optimal_arms(self) -> None: 
         """
         Assess the non-dominated arms (optimal arms). 
         """
+        K = np.atleast_2d(self.A).shape[0]
+        self.y = np.vstack([self.expected_reward(self.A[i]) for i in range(K)])
         self.opt_ind = par_non_dominated_sorting(self.y)
-        self.opt_arm = self.A[self.opt_ind] 
-        self.opt_y = self.y[self.opt_ind]
 
     def _eval_regret_arm(self, arm: np.ndarray) -> float: 
         """
@@ -105,10 +160,10 @@ class env_moslb:
         float
             Pareto suboptimal gap
         """
-        arm_y = np.matmul(arm, self.th.T)
+        arm_y = self.expected_reward(arm)
         psg = 0
-        for j in range(len(self.opt_ind)): 
-            opt_y = self.opt_y[j]
+        for j in self.opt_ind: 
+            opt_y = self.y[j]
             if par_dominance(opt_y, arm_y): 
                 tmp = np.min(opt_y-arm_y)
                 if tmp > psg: psg = tmp
@@ -127,13 +182,12 @@ class env_moslb:
             if not os.path.exists('.\\data\\'): os.makedirs('.\\data\\')
             filename = '.\\data\\ParetoOrder_d_' + str(self.get_num_dim) + '.pkl'
         data = {
-            'theta': self.th, 
-            'arms': self.A
+            'theta': self.th
                 }
         with open(filename, 'wb') as f: 
             pickle.dump(data, f)
 
-    def load_env(self, filename: str=None, verbose:bool=False) -> None: 
+    def load_env(self, filename: str=None) -> None: 
         """
         Load the existing environment for MOSLB with Pareto order
 
@@ -141,27 +195,19 @@ class env_moslb:
         ----------
         filename : str, optional
             file path, by default None. If default, the file in subfolder 'data' named
-            ParetoOrder_d_*.pkl will be loaded. 
-        verbose : bool, optional
-            whether to print the information, by default False
+            ParetoOrder_d_*.pkl will be loaded.
         """
         if filename is None: 
             filename = '.\\data\\ParetoOrder_d_' + str(self.get_num_dim) + '.pkl'
         with open(filename, 'rb') as f: 
             data = pickle.load(f)
         self.th = data['theta']
-        self.A = data['arms']
-        # initialize the parameters 
-        self._expected_reward()
-        self._optimal_arms()
-        self._eval_regret()
-        if verbose: self.print_info()
 
-    def _eval_regret(self) -> None: 
+    def _eval_all_regret(self) -> None: 
         """
         Evaluate the regret for all the arms.
         """
-        self.reg = np.vstack([self._eval_regret_arm(self.A[i]) for i in range(self.get_num_arm)])
+        return np.vstack([self._eval_regret_arm(self.A[i]) for i in range(self.get_num_arm)])
 
     def regret(self, arm: np.ndarray) -> float: 
         """
@@ -177,15 +223,19 @@ class env_moslb:
         float (or np.ndarray in pc and pl)
             the regret value(s)
         """
-        if not isinstance(arm, int): 
-            ind = np.where(np.isclose(self.A, arm).all(axis=1))
-        else: 
-            ind = arm
-        return self.reg[ind]
+        if isinstance(arm, int): 
+            arm = self.A[arm]
+        return self._eval_regret_arm(arm)
 
-    def reset(self, num_arms:int, verbose:bool=False) -> None: 
+    def reset(self) -> None: 
         """
-        Initialize the environment and sample the unknown parameters randomly. 
+        Initialize the environment, i.e., sample the unknown parameters randomly. 
+        """
+        self._sample_theta()
+
+    def observe_context(self, num_arms:int, verbose:bool=False) -> np.ndarray:
+        """
+        Obtain the arms' context 
 
         Parameters
         ----------
@@ -193,13 +243,17 @@ class env_moslb:
             number of the arms 
         verbose : bool, optional
             whether to print the information, by default False
+
+        Returns
+        -------
+        np.ndarray
+            arms' context
         """
-        self._sample_theta()
-        self._sample_arms(num_arms)
-        self._expected_reward()
-        self._optimal_arms()
-        self._eval_regret()
-        if verbose: self.print_info()
+        if self.vary_context or not hasattr(self, "A"): 
+            self._sample_arms(num_arms)
+            self._optimal_arms()
+            if verbose: self.print_info()
+        return self.A
 
     def print_info(self): 
         """
@@ -210,316 +264,252 @@ class env_moslb:
              '#dimension': self.d, 
              '#arms': self.A.shape[0], 
              '#optimal arms': len(self.opt_ind), 
-             'Regret for each arm': self.reg
+             'Regret for each arm': self._eval_all_regret()
              }
         )
 
 
 
-class env_moslb_pl(env_moslb):
+class simulator_moslb_pl(simulator_moslb):
+    def __init__(self, 
+        num_dim:int, 
+        priority_level:list, 
+        noise:any= np.random.normal, 
+        R:float= 1,
+        vary_context:bool= False
+        ) -> None:
+        """
+        Environment for multi-objective stochastic linear bandits
+        with mixed Pareto-lexicographic order under priority levels
 
-    def __init__(self, num_dim, priority_level, noise=np.random.normal, R=1) -> None:
-
+        Parameters
+        ----------
+        num_dim : int
+            number of dimension of the arms' context
+        priority_level: list
+            describe the MPL-PL relationship between the objectives
+        noise : any, optional
+            R-sub-Gaussian noise for reward, by default np.random.normal
+        R : int, optional
+            parameter in noise, by default 1
+        vary_context : bool, optional
+            whether the contexts at each round are fixed or not
+        """
         self.pl = priority_level
         self.l = len(self.pl) 
         self.ml = [len(self.pl[i]) for i in range(self.l)]
-
-        self.num_obj = sum(self.ml)
-        super().__init__(self.num_obj, num_dim, noise, R)
-        
+        self.m = sum(self.ml)
+        super().__init__(self.m,num_dim,noise,R,vary_context)
         self.noise = noise
         self.R = R
+        self.vary_context = vary_context
 
-    def _assert_input(self) -> None: 
-
-        pass
-
-    def _sample_theta(self) -> list: 
-
-        self.th = [] 
+    def _optimal_arms(self) -> None: 
+        """
+        Assess the optimal arms 
+        """
+        K = np.atleast_2d(self.A).shape[0]
+        self.y = np.vstack([self.expected_reward(self.A[i]) for i in range(K)])
+        opt_ind = [np.arange(self.A.shape[0])]
         for i in range(self.l): 
-            theta = np.zeros(shape=(self.ml[i],self.d))
-            for j in range(self.ml[i]): 
-                temp = np.random.normal(size=self.d)
-                temp /= np.linalg.norm(temp) 
-                rad = np.random.uniform() ** (1 / self.d) 
-                theta[j] = temp * rad
-            self.th.append(theta)
-    
-    def _expected_reward(self) -> list: 
+            opt_ind.append(
+                opt_ind[-1][par_non_dominated_sorting(self.y[opt_ind[-1]][:,self.pl[i]])]
+            )
+        self.opt_ind = opt_ind[1:]
 
-        self.y = [np.dot(self.A, self.th[i].T) for i in range(self.l)]
+    def _eval_regret_arm(self, arm:np.ndarray) -> np.ndarray:
+        """
+        Evaluate the regret for an arm under MPL-PL 
 
-    def _optimal_arms(self) -> list: 
-
-        opt_arm = []
-        opt_y = []
-        opt_ind = []
-        tmp_ind = fast_non_dominated_sorting(self.y[0], self.ml[0])
-        opt_ind.append(tmp_ind)
-
-        for i in range(self.l-1): 
-            tmp_ind = fast_non_dominated_sorting(self.y[i+1][opt_ind[i]], self.ml[i+1])
-            opt_ind.append(opt_ind[-1][tmp_ind])
-
-        for i in range(self.l): 
-            opt_arm.append(self.A[opt_ind[i]])
-            opt_y.append(self.y[i][opt_ind[i]])
-
-        self.opt_ind, self.opt_arm, self.opt_y = opt_ind, opt_arm, opt_y
-
-    def get_reward(self, arm) -> np.ndarray: 
-        """Get reward 
+        Parameters
+        ----------
+        arm : np.ndarray
+            contextual information for the arm
 
         Returns
         -------
         np.ndarray
-            _description_
+            PL regret with length of l
         """
-        res = [] 
-        for i in range(self.l): 
-            res.append(self.y[i][arm] + self.noise(0,self.R,(self.ml[i],)))
-        return res
-    
-    def print_info(self): 
-
-        pprint(
-            {'#objective': self.m, 
-             '#dimension': self.d, 
-             '#arms': self.A.shape[0], 
-             'priority level': self.pl, 
-             '#optimal arms': [len(self.opt_ind[i]) for i in range(self.l)], 
-             'Regret for each arm': self.reg
-             }
-        )
-
-    def reset(self, num_arms, verbose=False) -> None: 
-
-        self._sample_theta()
-        self._sample_arms(num_arms)
-        self._expected_reward()
-        self._optimal_arms()
-        self._eval_regret()
-        if verbose: self.print_info()
-
-    def _eval_regret_arm(self, arm) -> np.ndarray:
-
-        arm_y = [np.dot(arm, self.th[i].T) for i in range(self.l)]
-
         reg = np.zeros((self.l,))
+        arm_y = self.expected_reward(arm)
+
         for i in range(self.l): 
             delta_x = 0
-            for j in range(len(self.opt_ind[i])): 
-                opt_y = self.opt_y[i][j]
-                if par_dominance(opt_y, arm_y[i]): 
-                    tmp = np.min(opt_y-arm_y[i])
+            for j in self.opt_ind[i]:
+                opt_y = self.y[j]
+                if par_dominance(opt_y[self.pl[i]], arm_y[self.pl[i]]): 
+                    tmp = np.min(opt_y[self.pl[i]]- arm_y[self.pl[i]])
                     if tmp > delta_x: delta_x = tmp
             if delta_x > 0: 
                 reg[i] = delta_x
                 break
-
         return reg
     
     def save_env(self, filename: str=None) -> None:
+        """
+        Save the environment to the "data" folder
 
+        Parameters
+        ----------
+        filename : str, optional
+            saving path, by default None
+        """
         if filename is None: 
             filename = '.\\data\\pl_' + '-'.join(str(e) for e in self.ml) + \
                 '_d_' + str(self.get_num_dim) + '.pickle'
         data = {
             'theta': self.th, 
-            'arms': self.A
+            'priority_level': self.pl
                 }
         with open(filename, 'wb') as f: 
             pickle.dump(data, f)
 
-    def load_env(self, filename: str=None, verbose=False) -> None:
+    def load_env(self, filename: str=None) -> None:
+        """
+        Load the existing environment for MOSLB with MPL-PL order
 
+        Parameters
+        ----------
+        filename : str, optional
+            file path, by default None. If default, the file in subfolder 'data' named
+            pl_*_d_*.pkl will be loaded. 
+        """
         if filename is None: 
             filename = '.\\data\\pl_' + '-'.join(str(e) for e in self.ml) + \
                 '_d_' + str(self.get_num_dim) + '.pickle'
         with open(filename, 'rb') as f: 
             data = pickle.load(f)
         self.th = data['theta']
-        self.A = data['arms']
-
-        self._expected_reward()
-        self._optimal_arms()
-        self._eval_regret()
-        if verbose: self.print_info()
+        self.pl = data['priority_level']
 
 
 
+class simulator_moslb_pc(simulator_moslb): 
+    def __init__(
+        self, 
+        num_dim, 
+        priority_chain, 
+        noise:any= np.random.normal, 
+        R:float= 1,
+        vary_context:bool= False
+        ) -> None:
+        """
+        Environment for multi-objective stochastic linear bandits
+        with mixed Pareto-lexicographic order under priority chains
 
-class env_moslb_pc(env_moslb): 
-
-    def __init__(self, num_dim, priority_chain, noise=np.random.normal, R=1) -> None:
-
+        Parameters
+        ----------
+        num_dim : int
+            number of dimension of the arms' context
+        priority_chain: list
+            describe the MPL-PC relationship between the objectives
+        noise : any, optional
+            R-sub-Gaussian noise for reward, by default np.random.normal
+        R : int, optional
+            parameter in noise, by default 1
+        vary_context : bool, optional
+            whether the contexts at each round are fixed or not
+        """
         self.d = num_dim
         self.pc = priority_chain
         self.c = len(self.pc) 
         self.mc = [len(self.pc[i]) for i in range(self.c)]
-
+        self.c_max = np.max(self.mc)
         self.num_obj = sum(self.mc)
         super().__init__(self.num_obj, num_dim, noise, R)
-
         self.noise = noise
         self.R = R
+        self.vary_context = vary_context
 
-    def _sample_theta(self) -> list: 
+    def expected_reward(self, arm:np.ndarray) -> np.ndarray: 
+        """
+        Evaluate the expected reward by the linear model
+        """
+        assert arm.ndim == 1
+        return np.dot(arm, self.th.T).round(decimals=2)
 
-        self.th = [] 
-        for i in range(self.c): 
-            theta = np.zeros(shape=(self.mc[i],self.d))
-            for j in range(self.mc[i]): 
-                temp = np.random.normal(size=self.d)
-                temp /= np.linalg.norm(temp) 
-                rad = np.random.uniform() ** (1 / self.d) 
-                theta[j] = temp * rad
-            self.th.append(theta)
+    def _optimal_arms(self) -> None: 
+        """
+        Access the optimal arms under MPL-PC order 
+        """
+        K = np.atleast_2d(self.A).shape[0]
+        self.y = np.vstack([self.expected_reward(self.A[i]) for i in range(K)])
+        tmp_y = [self.y[:,self.pc[i]].reshape(K,-1) for i in range(self.c)]
+        self.opt_ind = pc_non_dominated_sorting(tmp_y)
 
-    def _sample_arms(self, num_arms) -> np.ndarray:
+    def _eval_regret_arm(self, arm:np.ndarray) -> np.ndarray:
+        """
+        Evaluate the MPL-PC regret for an arm
 
-        n_subopt = self.d
-        A_part1 = np.zeros(shape=(num_arms-n_subopt, self.d))
-        A_part2 = []
-
-        for i in range(num_arms-n_subopt): 
-            point = np.random.normal(size=self.d)
-            point /= np.linalg.norm(point)
-            rad = np.random.uniform() ** (1 / self.d)
-            A_part1[i] = rad * point
-
-        y_part1 = [np.matmul(A_part1, self.th[i].T).round(decimals=2) for i in range(self.c)]
-        non_dom_ind = pc_non_dominated_sorting(y_part1)
-        y_opt = [y_part1[i][non_dom_ind] for i in range(self.c)]
-        num_opt = len(non_dom_ind) 
-
-        index = 0
-        n_subopt1 = np.random.choice(n_subopt)
-        while index < n_subopt1: 
-            id = np.random.choice(num_opt)
-            point = np.random.normal(size=self.d)
-            point /= np.linalg.norm(point)
-            rad = np.random.uniform() ** (1 / self.d)
-            arm = rad * point
-            arm_y = [np.dot(arm, self.th[j].T).round(decimals=2) for j in range(self.c)]
-            if arm_y[0][0] == y_opt[0][id,0] and arm_y[1][0] == y_opt[1][id,0]: 
-                A_part2.append(arm) 
-                index += 1
-                print("First form suboptimal arm {} generated.".format(index))
-
-        while index < n_subopt: 
-            id = np.random.choice(num_opt)
-            point = np.random.normal(size=self.d)
-            point /= np.linalg.norm(point)
-            rad = np.random.uniform() ** (1 / self.d)
-            arm = rad * point
-            arm_y = [np.dot(arm, self.th[j].T).round(decimals=2) for j in range(self.c)]
-            if arm_y[0][0] == y_opt[0][id,0] and arm_y[1][0] == y_opt[1][id,0] \
-                and arm_y[1][1] == y_opt[1][id,1]: 
-                A_part2.append(arm)  
-                index += 1
-                print("Second form suboptimal arm {} generated.".format(index))
-
-        self.A = np.append(A_part1, np.vstack(A_part2), axis=0)
-
-    def _expected_reward(self) -> list: 
-
-        self.y = [np.dot(self.A, self.th[i].T).round(decimals=2) for i in range(self.c)]
-
-    def _optimal_arms(self) -> list: 
-
-        self.opt_ind = []
-        self.opt_ind = pc_non_dominated_sorting(self.y)
-        self.opt_arm = self.A[self.opt_ind]
-        self.opt_y = [self.y[i][self.opt_ind] for i in range(self.c)]
-
-    def get_reward(self, arm) -> np.ndarray: 
-        """Get reward 
+        Parameters
+        ----------
+        arm : np.ndarray
+            arm's context
 
         Returns
         -------
         np.ndarray
-            _description_
+            PC regret for the arm
         """
-        res = [] 
-        for i in range(self.c): 
-            # res.append(np.dot(arm, self.th[i].T) + self.noise(0,self.R,(self.mc[i],)))
-            res.append(self.y[i][arm] + self.noise(0,self.R,(self.mc[i],)))
-        return res
-    
-    def print_info(self): 
-
-        pprint(
-            {'#objective': self.m, 
-             '#dimension': self.d, 
-             '#arms': self.A.shape[0], 
-             'priority chain': self.pc, 
-             '#optimal arms': self.opt_ind, 
-             'Regret for each arm': self.reg
-             }
-        )
-
-    def reset(self, num_arms, verbose=False) -> None: 
-
-        self._sample_theta()
-        self._sample_arms(num_arms)
-        self._expected_reward()
-        self._optimal_arms()
-        self._eval_regret()
-        if verbose: self.print_info()
-
-    def _eval_regret_arm(self, arm) -> np.ndarray:
-
-        arm_y = [np.dot(arm, self.th[i].T).round(decimals=2) for i in range(self.c)]
-        c_max = np.max(self.mc)
+        arm_y = [self.expected_reward(arm)[i] for i in self.pc]
         reg = []
 
-        for i in range(len(self.opt_ind)):
-            opt_y = [self.opt_y[j][i] for j in range(self.c)]
+        for i in self.opt_ind:
+            opt_y = [self.y[i][j] for j in self.pc]
             if pc_dominance(opt_y, arm_y):
-                tmp_reg = np.zeros((self.c, c_max))
+                tmp_reg = np.zeros((self.c, self.c_max))
                 for j in range(self.c): 
                     for k in range(self.mc[j]):
                         tmp_reg[j][k] = np.maximum(0, opt_y[j][k]-arm_y[j][k])
-                ind = np.lexsort([tmp_reg[:, o] for o in reversed(range(c_max))])[0]
+                ind = np.lexsort([tmp_reg[:, o] for o in reversed(range(self.c_max))])[0]
                 reg.append(tmp_reg[ind])
 
         if len(reg) == 0: 
-            return np.zeros((c_max))
+            return np.zeros((self.c_max))
         elif len(reg) == 1: 
             return reg[0]
         else: 
             reg = np.vstack(reg)
-            ind = np.lexsort([reg[:, o] for o in reversed(range(c_max))])[0]
+            ind = np.lexsort([reg[:, o] for o in reversed(range(self.c_max))])[0]
             return reg[ind]
         
     def save_env(self, filename: str=None) -> None:
+        """
+        Save the environment to the "data" folder
 
+        Parameters
+        ----------
+        filename : str, optional
+            saving path, by default None
+        """
         if filename is None: 
             filename = '.\\data\\pc_' + '-'.join(str(e) for e in self.mc) + \
                 '_d_' + str(self.get_num_dim) + '.pkl'
         data = {
             'theta': self.th, 
-            'arms': self.A
+            'priority_chain': self.pc
                 }
         with open(filename, 'wb') as f: 
             pickle.dump(data, f)
 
-    def load_env(self, filename: str=None, verbose=False) -> None:
+    def load_env(self, filename: str=None) -> None:
+        """
+        Load the existing environment for MOSLB with MPL-PC order
 
+        Parameters
+        ----------
+        filename : str, optional
+            file path, by default None. If default, the file in subfolder 'data' named
+            pc_*_d_*.pkl will be loaded. 
+        """
         if filename is None: 
             filename = '.\\data\\pc_' + '-'.join(str(e) for e in self.mc) + \
                 '_d_' + str(self.get_num_dim) + '.pkl'
         with open(filename, 'rb') as f: 
             data = pickle.load(f)
         self.th = data['theta']
-        self.A = data['arms']
-
-        self._expected_reward()
-        self._optimal_arms()
-        self._eval_regret()
-        if verbose: self.print_info()
+        self.pc = data['priority_chain']
 
 
 
@@ -527,33 +517,15 @@ if __name__ == "__main__":
 
     num_obj = 3 
     num_dim = 5
-
-    # env = env_moslb_pl(num_obj, num_dim, priority_level=[[0,1], [2,3]])
-
-    # env.reset(num_arms=5*num_dim)
-
-    # env.save_env(".\\data\\test.pickle")
-
-    # filename = ".\\data\\test.pickle" 
-
-    # with open(filename, 'rb') as f: 
-    #     env = pickle.load(f)
-
-    # env.print_info()
-
-    # for i in range(env.get_num_arm):
-    #     print(env.eval_regret(env.A[i]))
-
-    # env = env_moslb_pc(num_dim, priority_chain=[[0,1], [2,3,4]])
-
-    # env.reset(5*num_dim, verbose=0)
-
-    # print(env.opt_y)
-
+    ###############################################
+    ########### example for moslb env #############
+    ###############################################
+    env = simulator_moslb_pl(num_dim=num_dim,priority_level=[[0,1,2],[3,4]])
+    # env.reset()
+    # env.observe_context(num_arms=20,verbose=1)
     # env.save_env()
 
+    env.load_env()
+    env.observe_context(num_arms=20,verbose=1)
+
     # env.load_env(verbose=1)
-
-    env = env_moslb(num_obj, num_dim)
-
-    env.reset(5*num_dim, verbose=1)
