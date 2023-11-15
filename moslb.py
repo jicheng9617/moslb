@@ -3,80 +3,147 @@ import numpy as np
 from utils import par_non_dominated_sorting, prior_free_lexi_filter
 
 class moslb:
-    def __init__(self, dim, num_obj) -> None:
+    def __init__(self, 
+        num_dim:int, 
+        num_obj:int, 
+        lamda:float=1.,
+        delta:float=.05
+        ) -> None:
+        """
+        Multi-objective stochastic linear bandit
+        UCB algorithm considering Pareto order
 
-        self.d = dim
+        Parameters
+        ----------
+        num_dim : int
+            number of context's dimension
+        num_obj : int
+            number of objectives
+        lamda : float, optional
+            regularization term, lambda, by default 1.0
+        delta : float, optional 
+            confidence level value, by default 0.05
+        """
+        self.d = num_dim
         self.m = num_obj
+        self.lamda = lamda
+        self.delta = delta
 
     @property
     def get_num_obj(self) -> int:
-        """_summary_
-
-        Returns
-        -------
-        int
-            _description_
-        """
         return self.m
     
     @property
-    def get_num_arm(self) -> int: 
-        """_summary_
-
-        Returns
-        -------
-        int
-            _description_
-        """
-        return np.atleast_2d(self.A).shape[0]
+    def get_num_dim(self) -> int: 
+        return self.d
     
     @property
-    def get_num_dim(self) -> int: 
-        """_summary_
+    def get_optimal_arms(self) -> np.ndarray: 
+        return self.opt_ind
 
-        Returns
-        -------
-        int
-            _description_
+    def reset(self) -> None: 
         """
-        return self.d
-
-    def reset(self, arms: np.ndarray, delta: float) -> None: 
-
-        self.A = arms
-        self.delta = delta
-        # initialize parameters
+        Initialize the parameters 
+        """
         self.t = 1
         self.X_list = [] 
         self.Y_list = [] 
-        self.V = np.eye(self.d) 
+        self.V = self.lamda * np.eye(self.d) 
         self.theta = np.zeros((self.m, self.d))
-        self.V_inv = self.V 
+        self.V_inv = 1/self.lamda * self.V 
 
-    def _expected_reward(self): 
+    def estimate_reward(self, arm:np.ndarray) -> float: 
+        """
+        Estimate the expected reward for an arm
 
-        self.y_hat = np.matmul(self.A, self.theta.T) 
+        Parameters
+        ----------
+        arm : np.ndarray
+            arm's context
 
-    def _eval_ucb(self, alpha: float=1.) -> np.ndarray: 
+        Returns
+        -------
+        float
+            estimated reward
+        """
+        assert arm.ndim == 1
+        return np.dot(arm, self.theta.T) 
+    
+    def estimate_uncertainty(self, arm:np.ndarray) -> float: 
+        """
+        Estimate the width of confidence level for an arm
 
+        Parameters
+        ----------
+        arm : np.ndarray
+            arm's context
+
+        Returns
+        -------
+        float
+            estimated variance
+        """
+        assert arm.ndim == 1
         gamma_t = np.sqrt(self.d * np.log(self.m * (1 + self.t) / self.delta)) + 1
-        self.w_t = np.vstack([gamma_t * np.sqrt(np.dot(self.A[i], self.V_inv).dot(self.A[i]))\
-                     for i in range(self.get_num_arm)])
-        self.u_t = self.y_hat + self.w_t
+        w_t = gamma_t * np.sqrt(np.dot(arm, self.V_inv).dot(arm))
+        return w_t
 
-    def _optimal_arm_set(self) -> np.ndarray: 
+    def _eval_ucb(self, arm:np.ndarray, alpha: float=1.) -> np.ndarray: 
+        """
+        Evaluate the upper confidence bound for an arm
 
-        return par_non_dominated_sorting(self.u_t)
+        Returns
+        -------
+        np.ndarray
+            upper confidence bound of the estimated reward
+        """
+        return self.estimate_reward(arm) + alpha*self.estimate_uncertainty(arm)
 
-    def take_action(self, alpha: float=1.) -> int: 
+    def _eval_lcb(self, arm:np.ndarray, alpha: float=1.) -> np.ndarray: 
+        """
+        Evaluate the lower confidence bound for an arm
 
-        self._expected_reward()
-        self._eval_ucb(alpha=alpha)
-        opt_ind = self._optimal_arm_set()
-        return np.random.choice(opt_ind, size=1).item()
+        Returns
+        -------
+        np.ndarray
+            lower confidence bound of the estimated reward
+        """
+        return self.estimate_reward(arm) - alpha*self.estimate_uncertainty(arm)
+
+    def take_action(self, 
+        arm:np.ndarray, 
+        alpha: float=1.) -> int: 
+        """
+        Take an action based on P-UCB algorithm
+
+        Parameters
+        ----------
+        arm : np.ndarray
+            arms' context
+        alpha : float, optional
+            parameter to control the uncertainty level, by default 1.
+
+        Returns
+        -------
+        int
+            index of the selected arm
+        """
+        arm = np.atleast_2d(arm)
+        ucb = np.vstack([self._eval_ucb(arm=arm[i],alpha=alpha) for i in range(arm.shape[0])])
+        self.opt_ind = par_non_dominated_sorting(ucb)
+        return np.random.choice(self.opt_ind, size=1).item()
 
     def update_params(self, arm: np.ndarray, reward: np.ndarray) -> None: 
+        """
+        Update the parameters
 
+        Parameters
+        ----------
+        arm : np.ndarray
+            context of the selected arm
+        reward : np.ndarray
+            observed reward of the arm
+        """
         self.t += 1
         self.X_list.append(arm) 
         self.Y_list.append(reward)
@@ -84,142 +151,174 @@ class moslb:
         Y = np.vstack(self.Y_list) 
         self.V += np.outer(arm, arm)
         self.V_inv = np.linalg.inv(self.V) 
-
         for i in range(self.m): 
             self.theta[i] = self.V_inv @ X.T @ Y[:, i]
 
 
 
-
 class moslb_pl(moslb): 
+    def __init__(
+        self, 
+        num_dim:int, 
+        priority_level:list, 
+        lamda:float=1.,
+        delta:float=.05
+        ) -> None:
+        """
+        Multi-objective stochastic linear bandit algorithm 
+        considering MPL-PL order
 
-    def __init__(self, dim, priority_level) -> None:
-        self.d = dim 
+        Parameters
+        ----------
+        num_dim : int
+            number of context's dimension
+        priority_level : list
+            list of objective index representing priority relation
+        lamda : float, optional
+            regularization term, lambda, by default 1.0
+        delta : float, optional 
+            confidence level value, by default 0.05
+        """
+        self.d = num_dim 
         self.pl = priority_level
         self.l = len(self.pl)
         self.ml = [len(self.pl[i]) for i in range(self.l)]
-        super().__init__(dim, num_obj=sum(self.ml))
+        self.m = sum(self.ml)
+        super().__init__(num_dim=num_dim, num_obj=self.m, lamda=lamda, delta=delta)
+    
+    @property
+    def get_optimal_index(self) -> np.ndarray: 
+        if hasattr(self, 'opt_ind'): return self.opt_ind
 
-    def reset(self, arms: np.ndarray, delta: float) -> None: 
+    def take_action(
+        self, 
+        arm:np.ndarray, 
+        epsilon: float,
+        alpha: float=1.
+        ) -> int: 
+        """
+        Take an action
 
-        self.A = arms
-        self.delta = delta
-        # initialize parameters
-        self.t = 1
-        self.X_list = [] 
-        self.Y_list = [[] for _ in range(self.l)] 
-        self.V = np.eye(self.d) 
-        self.theta = [np.zeros((self.ml[i], self.d)) for i in range(self.l)]
-        self.V_inv = self.V 
+        Parameters
+        ----------
+        arm : np.ndarray
+            arms' context
+        alpha : float, optional
+            parameter to control the uncertainty level, by default 1.
 
-    def _expected_reward(self): 
-
-        self.y_hat = [np.matmul(self.A, self.theta[i].T) for i in range(self.l)] 
-
-    def _eval_ucb(self, alpha: float=1.) -> np.ndarray: 
-
-        gamma_t = np.sqrt(self.d * np.log(self.m * (1 + self.t) / self.delta)) + 1
-        self.w_t = np.vstack([alpha * gamma_t * np.sqrt(np.dot(self.A[i], self.V_inv).dot(self.A[i]))\
-                     for i in range(self.get_num_arm)])
-        self.u_t = [self.y_hat[i] + self.w_t for i in range(self.l)]
-
-    def _optimal_arm_set(self) -> np.ndarray: 
-
-        opt_ind = [] 
-        opt_ind.append(par_non_dominated_sorting(self.u_t[0]))
-        for i in range(1, self.l): 
-            opt_ind.append(opt_ind[i-1][par_non_dominated_sorting(self.u_t[i][opt_ind[i-1]])])
-        return opt_ind[-1]
-
-    def take_action(self, epsilon: float, alpha: float=1.) -> int: 
-
-        self._expected_reward()
-        self._eval_ucb(alpha=alpha)
-        if np.max(self.w_t) > epsilon:
-            opt_ind = np.where(self.w_t > epsilon)[0]
+        Returns
+        -------
+        int
+            index of the selected arm
+        """
+        arm = np.atleast_2d(arm)
+        w_t = np.vstack([self.estimate_uncertainty(arm=arm[i]) for i in range(arm.shape[0])])
+        if np.max(w_t) > epsilon:
+            opt_ind = np.where(w_t > epsilon)[0]
+            return np.random.choice(opt_ind, size=1).item()
         else: 
-            opt_ind = self._optimal_arm_set()
-        return np.random.choice(opt_ind, size=1).item()
+            ucb = np.vstack([self._eval_ucb(arm=arm[i],alpha=alpha) for i in range(arm.shape[0])])
+            self._optimal_arms(ucb)
+            return np.random.choice(self.opt_ind[-1], size=1).item()
 
-    def update_params(self, arm: np.ndarray, reward: list) -> None: 
+    def _optimal_arms(self, ucb:np.ndarray) -> None: 
+        """
+        Evaluate the optimal arm set based on UCB of the arms
 
-        self.t += 1
-        self.X_list.append(arm) 
-        for i in range(self.l): self.Y_list[i].append(reward[i])
-        X = np.vstack(self.X_list) 
-        Y = [np.vstack(self.Y_list[i]) for i in range(self.l)] 
-        self.V += np.outer(arm, arm)
-        self.V_inv = np.linalg.inv(self.V) 
-
+        Parameters
+        ----------
+        ucb : np.ndarray
+            upper confidence bound for the arms
+        """
+        opt_ind = [np.arange(ucb.shape[0])]
         for i in range(self.l): 
-            for j in range(self.ml[i]):
-                self.theta[i][j] = self.V_inv @ X.T @ Y[i][:, j]
+            opt_ind.append(
+                opt_ind[-1][par_non_dominated_sorting(ucb[opt_ind[-1]][:,self.pl[i]])]
+            )
+        self.opt_ind = opt_ind[1:]
 
 
 
 class moslb_pc(moslb): 
+    def __init__(
+        self, 
+        num_dim:int, 
+        priority_chain:list,
+        lamda:float=1.,
+        delta:float=.05
+        ) -> None:
+        """
+        Multi-objective stochastic linear bandit algorithm 
+        considering MPL-PC order
 
-    def __init__(self, dim, priority_chain) -> None:
-        self.d = dim 
+        Parameters
+        ----------
+        num_dim : int
+            number of context's dimension
+        priority_chain : list
+            list of objective index representing priority relation
+        lamda : float, optional
+            regularization term, lambda, by default 1.0
+        delta : float, optional 
+            confidence level value, by default 0.05
+        """
+        self.d = num_dim 
         self.pc = priority_chain
         self.c = len(priority_chain)
         self.mc = [len(self.pc[i]) for i in range(self.c)]
         self.m = sum(self.mc)
-        super().__init__(dim=self.d, num_obj=self.m)
+        super().__init__(num_dim=self.d, num_obj=self.m, lamda=lamda, delta=delta)
 
-    def reset(self, arms: np.ndarray, delta: float) -> None: 
+    @property
+    def get_optimal_index(self) -> np.ndarray: 
+        if hasattr(self, 'opt_ind'): return self.opt_ind
 
-        self.A = arms
-        self.delta = delta
-        # initialize parameters
-        self.t = 1
-        self.X_list = [] 
-        self.Y_list = [[] for _ in range(self.c)] 
-        self.V = np.eye(self.d) 
-        self.theta = [np.zeros((self.mc[i], self.d)) for i in range(self.c)]
-        self.V_inv = self.V 
+    def take_action(
+        self, 
+        arm:np.ndarray, 
+        epsilon: float,
+        alpha: float=1.
+        ) -> int: 
+        """
+        Take an action
 
-    def _expected_reward(self): 
+        Parameters
+        ----------
+        arm : np.ndarray
+            arms' context
+        alpha : float, optional
+            parameter to control the uncertainty level, by default 1.
 
-        self.y_hat = [np.matmul(self.A, self.theta[i].T).round(decimals=2) \
-                      for i in range(self.c)] 
-
-    def _eval_ucb(self, alpha: float=1.) -> np.ndarray: 
-
-        gamma_t = np.sqrt(self.d * np.log(self.m * (1 + self.t) / self.delta)) + 1
-        self.w_t = np.vstack([alpha * gamma_t * np.sqrt(np.dot(self.A[i], self.V_inv).dot(self.A[i]))\
-                     for i in range(self.get_num_arm)])
-        self.u_t = [self.y_hat[i] + self.w_t for i in range(self.c)]
-        self.l_t = [self.y_hat[i] - self.w_t for i in range(self.c)]
-
-    def _pc_filter(self) -> np.ndarray: 
-
-        candidate_ind = []
-        for i in range(self.c): 
-            candidate_ind.append(prior_free_lexi_filter(ucb=self.u_t[i], lcb=self.l_t[i]))
-
-        return np.unique(np.hstack(candidate_ind))
-    
-    def take_action(self, epsilon: float, alpha: float=1.) -> int: 
-
-        self._expected_reward()
-        self._eval_ucb(alpha=alpha)
-        if np.max(self.w_t) > epsilon:
-            opt_ind = np.where(self.w_t > epsilon)[0]
+        Returns
+        -------
+        int
+            index of the selected arm
+        """
+        arm = np.atleast_2d(arm)
+        w_t = np.vstack([self.estimate_uncertainty(arm=arm[i]) for i in range(arm.shape[0])])
+        if np.max(w_t) > epsilon:
+            opt_ind = np.where(w_t > epsilon)[0]
+            return np.random.choice(opt_ind, size=1).item()
         else: 
-            opt_ind = self._pc_filter()
-        return np.random.choice(opt_ind, size=1).item()
+            ucb = np.vstack([self._eval_ucb(arm=arm[i],alpha=alpha) for i in range(arm.shape[0])])
+            lcb = np.vstack([self._eval_lcb(arm=arm[i],alpha=alpha) for i in range(arm.shape[0])])
+            self._optimal_arms(ucb, lcb)
+            return np.random.choice(self.opt_ind, size=1).item()
+            
+    def _optimal_arms(self, ucb:np.ndarray, lcb:np.ndarray) -> None: 
+        """
+        Evaluate the optimal arm set based on UCB and LCB of the estimated rewards
+
+        Parameters
+        ----------
+        ucb : np.ndarray
+            upper confidence bound for the arms
+        lcb : np.ndarray
+            lower confidence bound for the arms
+        """
+        candidate_ind = []
+        for i in self.pc: 
+            candidate_ind.append(prior_free_lexi_filter(ucb[:,i], lcb[:,i]))
+        self.opt_ind = np.unique(np.hstack(candidate_ind))
     
-    def update_params(self, arm: np.ndarray, reward: list) -> None: 
-
-        self.t += 1
-        self.X_list.append(arm) 
-        for i in range(self.c): self.Y_list[i].append(reward[i])
-        X = np.vstack(self.X_list) 
-        Y = [np.vstack(self.Y_list[i]) for i in range(self.c)] 
-        self.V += np.outer(arm, arm)
-        self.V_inv = np.linalg.inv(self.V) 
-
-        for i in range(self.c): 
-            for j in range(self.mc[i]):
-                self.theta[i][j] = self.V_inv @ X.T @ Y[i][:, j]
+    
