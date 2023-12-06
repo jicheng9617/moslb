@@ -11,6 +11,7 @@ class mo_contextual_bandit:
         self, 
         num_obj:int, 
         num_dim:int, 
+        num_arm:int, 
         noise:any= np.random.normal, 
         R:int= 1
     ) -> None:
@@ -23,6 +24,8 @@ class mo_contextual_bandit:
             number of objectives 
         num_dim : int
             number of dimension of the arms' context
+        num_arm : int
+            number of arms
         noise : any, optional
             R-sub-Gaussian noise for reward, by default normal distribution
         R : int, optional
@@ -30,6 +33,7 @@ class mo_contextual_bandit:
         """
         self.m = num_obj
         self.d = num_dim
+        self.K = num_arm
         self.noise = noise
         self.R = R
 
@@ -39,7 +43,7 @@ class mo_contextual_bandit:
     
     @property
     def get_num_arm(self) -> int: 
-        return self.A.shape[0]
+        return self.K
     
     @property
     def get_num_dim(self) -> int: 
@@ -55,11 +59,23 @@ class mo_contextual_bandit:
         """
         raise NotImplementedError("Subclasses should implement this method.")
     
-    def get_reward(self, arm:np.ndarray) -> float: 
+    def get_reward(self, arm:int) -> float: 
+        """
+        Get the reward for the arm
 
+        Parameters
+        ----------
+        arm : int
+            index of selected arm
+
+        Returns
+        -------
+        float
+            reward value
+        """
         return self.expected_reward(arm) + self.noise(0,self.R,(self.m,))
     
-    def expected_reward(self, arm:np.ndarray) -> np.ndarray: 
+    def expected_reward(self, arm:int) -> np.ndarray: 
         """
         Method to evaluate the unknown reward function
         """
@@ -72,6 +88,7 @@ class simulator_moslb(mo_contextual_bandit):
         self, 
         num_obj:int, 
         num_dim:int, 
+        num_arm:int, 
         noise:any= np.random.normal, 
         R:int= 1,
         vary_context:bool= False
@@ -85,6 +102,8 @@ class simulator_moslb(mo_contextual_bandit):
             number of objectives 
         num_dim : int
             number of dimension of the arms' context
+        num_arm : int
+            number of arms
         noise : any, optional
             R-sub-Gaussian noise for reward, by default np.random.normal
         R : int, optional
@@ -92,7 +111,7 @@ class simulator_moslb(mo_contextual_bandit):
         vary_context : bool, optional
             whether the contexts at each round are fixed or not
         """
-        super().__init__(num_obj,num_dim,noise,R)
+        super().__init__(num_obj,num_dim,num_arm,noise,R)
         self.vary_context = vary_context
 
     @property
@@ -131,29 +150,38 @@ class simulator_moslb(mo_contextual_bandit):
             rad = np.random.uniform() ** (1 / self.d)
             self.A[i] = rad * point
 
-    def expected_reward(self, arm:np.ndarray) -> np.ndarray: 
+    def expected_reward(self, arm:int) -> np.ndarray: 
         """
         Evaluate the expected reward by the linear model
+
+        Parameters
+        ----------
+        arm : int
+            index of the arm
+
+        Returns
+        -------
+        np.ndarray
+            true reward
         """
-        assert arm.ndim == 1
-        return np.dot(arm, self.th.T)
+        assert isinstance(arm, int)
+        return np.dot(self.A[arm], self.th.T)
 
     def _optimal_arms(self) -> None: 
         """
         Assess the non-dominated arms (optimal arms). 
         """
-        K = np.atleast_2d(self.A).shape[0]
-        self.y = np.vstack([self.expected_reward(self.A[i]) for i in range(K)])
+        self.y = np.vstack([self.expected_reward(i) for i in range(self.get_num_arm)])
         self.opt_ind = par_non_dominated_sorting(self.y)
 
-    def _eval_regret_arm(self, arm: np.ndarray) -> float: 
+    def _eval_regret_arm(self, arm:int) -> float: 
         """
         Evaluate the Pareto suboptimal gap for an input arm. 
 
         Parameters
         ----------
-        arm : np.ndarray
-            contextual information for the arm
+        arm : int
+            index of the arm
 
         Returns
         -------
@@ -207,24 +235,23 @@ class simulator_moslb(mo_contextual_bandit):
         """
         Evaluate the regret for all the arms.
         """
-        return np.vstack([self._eval_regret_arm(self.A[i]) for i in range(self.get_num_arm)])
+        return np.vstack([self._eval_regret_arm(i) for i in range(self.get_num_arm)])
 
-    def regret(self, arm: np.ndarray) -> float: 
+    def regret(self, arm:int) -> float: 
         """
         Return the regret for the chosen arm.
 
         Parameters
         ----------
-        arm : np.ndarray
-            arm context or index
+        arm : int
+            arm's index
 
         Returns
         -------
         float (or np.ndarray in pc and pl)
             the regret value(s)
         """
-        if isinstance(arm, int): 
-            arm = self.A[arm]
+        assert isinstance(arm, int)
         return self._eval_regret_arm(arm)
 
     def reset(self) -> None: 
@@ -233,14 +260,12 @@ class simulator_moslb(mo_contextual_bandit):
         """
         self._sample_theta()
 
-    def observe_context(self, num_arms:int, verbose:bool=False) -> np.ndarray:
+    def observe_context(self, verbose:bool=False) -> np.ndarray:
         """
         Obtain the arms' context 
 
         Parameters
         ----------
-        num_arms : int
-            number of the arms 
         verbose : bool, optional
             whether to print the information, by default False
 
@@ -250,7 +275,7 @@ class simulator_moslb(mo_contextual_bandit):
             arms' context
         """
         if self.vary_context or not hasattr(self, "A"): 
-            self._sample_arms(num_arms)
+            self._sample_arms(self.get_num_arm)
             self._optimal_arms()
             if verbose: self.print_info()
         return self.A
@@ -274,6 +299,7 @@ class simulator_moslb_pl(simulator_moslb):
     def __init__(self, 
         num_dim:int, 
         priority_level:list, 
+        num_arm:int, 
         noise:any= np.random.normal, 
         R:float= 1,
         vary_context:bool= False
@@ -288,6 +314,8 @@ class simulator_moslb_pl(simulator_moslb):
             number of dimension of the arms' context
         priority_level: list
             describe the MPL-PL relationship between the objectives
+        num_arm : int
+            number of arms
         noise : any, optional
             R-sub-Gaussian noise for reward, by default np.random.normal
         R : int, optional
@@ -299,32 +327,28 @@ class simulator_moslb_pl(simulator_moslb):
         self.l = len(self.pl) 
         self.ml = [len(self.pl[i]) for i in range(self.l)]
         self.m = sum(self.ml)
-        super().__init__(self.m,num_dim,noise,R,vary_context)
-        self.noise = noise
-        self.R = R
-        self.vary_context = vary_context
+        super().__init__(self.m,num_dim,num_arm,noise,R,vary_context)
 
     def _optimal_arms(self) -> None: 
         """
         Assess the optimal arms 
         """
-        K = np.atleast_2d(self.A).shape[0]
-        self.y = np.vstack([self.expected_reward(self.A[i]) for i in range(K)])
-        opt_ind = [np.arange(self.A.shape[0])]
+        self.y = np.vstack([self.expected_reward(i) for i in range(self.get_num_arm)])
+        opt_ind = [np.arange(self.get_num_arm)]
         for i in range(self.l): 
             opt_ind.append(
                 opt_ind[-1][par_non_dominated_sorting(self.y[opt_ind[-1]][:,self.pl[i]])]
             )
         self.opt_ind = opt_ind[1:]
 
-    def _eval_regret_arm(self, arm:np.ndarray) -> np.ndarray:
+    def _eval_regret_arm(self, arm:int) -> np.ndarray:
         """
         Evaluate the regret for an arm under MPL-PL 
 
         Parameters
         ----------
-        arm : np.ndarray
-            contextual information for the arm
+        arm : int
+            index for the arm
 
         Returns
         -------
@@ -390,6 +414,7 @@ class simulator_moslb_pc(simulator_moslb):
         self, 
         num_dim, 
         priority_chain, 
+        num_arm:int, 
         noise:any= np.random.normal, 
         R:float= 1,
         vary_context:bool= False
@@ -404,6 +429,8 @@ class simulator_moslb_pc(simulator_moslb):
             number of dimension of the arms' context
         priority_chain: list
             describe the MPL-PC relationship between the objectives
+        num_arm : int
+            number of arms
         noise : any, optional
             R-sub-Gaussian noise for reward, by default np.random.normal
         R : int, optional
@@ -417,35 +444,42 @@ class simulator_moslb_pc(simulator_moslb):
         self.mc = [len(self.pc[i]) for i in range(self.c)]
         self.c_max = np.max(self.mc)
         self.num_obj = sum(self.mc)
-        super().__init__(self.num_obj, num_dim, noise, R)
-        self.noise = noise
-        self.R = R
-        self.vary_context = vary_context
+        super().__init__(self.num_obj, num_dim, num_arm, noise, R)
 
-    def expected_reward(self, arm:np.ndarray) -> np.ndarray: 
+    def expected_reward(self, arm:int) -> np.ndarray: 
         """
-        Evaluate the expected reward by the linear model
+        Evaluate the expected reward by the linear model, the reward is rounded 
+        within two decimal to increase the number of optimal arms
+
+        Parameters
+        ----------
+        arm : int
+            index of the arm
+
+        Returns
+        -------
+        np.ndarray
+            true reward
         """
-        assert arm.ndim == 1
-        return np.dot(arm, self.th.T).round(decimals=2)
+        assert isinstance(arm, int)
+        return np.dot(self.A[arm], self.th.T).round(decimals=2)
 
     def _optimal_arms(self) -> None: 
         """
         Access the optimal arms under MPL-PC order 
         """
-        K = np.atleast_2d(self.A).shape[0]
-        self.y = np.vstack([self.expected_reward(self.A[i]) for i in range(K)])
-        tmp_y = [self.y[:,self.pc[i]].reshape(K,-1) for i in range(self.c)]
+        self.y = np.vstack([self.expected_reward(i) for i in range(self.get_num_arm)])
+        tmp_y = [self.y[:,self.pc[i]].reshape(self.get_num_arm,-1) for i in range(self.c)]
         self.opt_ind = pc_non_dominated_sorting(tmp_y)
 
-    def _eval_regret_arm(self, arm:np.ndarray) -> np.ndarray:
+    def _eval_regret_arm(self, arm:int) -> np.ndarray:
         """
         Evaluate the MPL-PC regret for an arm
 
         Parameters
         ----------
-        arm : np.ndarray
-            arm's context
+        arm : int
+            arm's index
 
         Returns
         -------
