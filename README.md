@@ -1,4 +1,4 @@
-# Multi-objective Stochastic Contextual Bandits
+# Multi-objective Stochastic Linear Bandits
 
 Code for AAAI2024 Paper: Hierarchize Pareto Dominance in Multi-objective Stochastic Linear Bandits
 
