@@ -133,23 +133,23 @@ class moslb:
         self.opt_ind = par_non_dominated_sorting(ucb)
         return np.random.choice(self.opt_ind, size=1).item()
 
-    def update_params(self, arm: np.ndarray, reward: np.ndarray) -> None: 
+    def update_params(self, arm_context: np.ndarray, reward: np.ndarray) -> None: 
         """
         Update the parameters
 
         Parameters
         ----------
-        arm : np.ndarray
+        arm_context : np.ndarray
             context of the selected arm
         reward : np.ndarray
             observed reward of the arm
         """
         self.t += 1
-        self.X_list.append(arm) 
+        self.X_list.append(arm_context) 
         self.Y_list.append(reward)
         X = np.vstack(self.X_list) 
         Y = np.vstack(self.Y_list) 
-        self.V += np.outer(arm, arm)
+        self.V += np.outer(arm_context, arm_context)
         self.V_inv = np.linalg.inv(self.V) 
         for i in range(self.m): 
             self.theta[i] = self.V_inv @ X.T @ Y[:, i]
