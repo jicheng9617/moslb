@@ -563,3 +563,4 @@ if __name__ == "__main__":
     env.observe_context(num_arms=20,verbose=1)
 
     # env.load_env(verbose=1)
+
