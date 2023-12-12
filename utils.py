@@ -1,4 +1,5 @@
 import numpy as np 
+import copy
 
 
 def fast_non_dominated_sorting(population, number_of_functions = 2):
@@ -147,16 +148,43 @@ def pc_non_dominated_sorting(pop: list):
     return np.array(non_dominate_ind)
 
 def prior_free_lexi_filter(ucb: np.ndarray, lcb: np.ndarray) -> np.ndarray: 
+    """
+    filter the optimal arms based on transitive closure relation of the linked relation  
 
-    mc = ucb.shape[1] 
-    opt_ind = []
-    opt_ind.append(np.array(range(ucb.shape[0])))
+    Parameters
+    ----------
+    ucb : np.ndarray
+        upper confidence bound of the arms
+    lcb : np.ndarray
+        lower confidence bound of the arms
+
+    Returns
+    -------
+    np.ndarray
+        index of the optimal arms
+    """
+    K,mc = ucb.shape
+    opt_ind = [np.arange(K)]
+
     for i in range(mc): 
         x_i = opt_ind[i][np.argmax(ucb[opt_ind[i], i])]
-        tmp_ind = opt_ind[i][np.where(ucb[opt_ind[i],i]>lcb[x_i,i])[0]]
-        opt_ind.append(tmp_ind)
-
+        opt_ind.append(
+            chain_filter(x_i,opt_ind[i],ucb[:, i],lcb[:, i])
+        )
     return opt_ind[-1]
+
+def chain_filter(arm, D1, u_t, l_t):
+    pre_results = []
+    results = [arm]
+    lowest = l_t[arm]
+
+    while len(results) != len(pre_results):
+        pre_results = copy.deepcopy(results)
+        for i in D1:
+            if u_t[i] >= lowest and i not in results:
+                results.append(i)
+                lowest = np.min([lowest, l_t[i]])
+    return np.array(results)
 
 
 if __name__ == "__main__": 
@@ -182,6 +210,8 @@ if __name__ == "__main__":
     # [0.95272219, 0.4606369 ],[0.55505175, 0.65496876],[0.62047633, 0.01251895]
     # [0.40258481, 0.38275378],[0.68383117, 0.5550799 ],[0.61244796, 0.50949707]
 
-    x1 = np.array([1., 2.2])
-    x2 = np.array([1.1, 2.1])
-    print(par_dominance(x1, x2))
+    # x1 = np.array([1., 2.2])
+    # x2 = np.array([1.1, 2.1])
+    # print(par_dominance(x1, x2))
+
+    print()
