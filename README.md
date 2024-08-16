@@ -11,5 +11,12 @@ The repository contains:
 
 If you find our work helpful, please consider citing our paper:
 ```
-@inproceedings
+@inproceedings{linpareto,
+  title={Hierarchize Pareto Dominance in Multi-Objective Stochastic Linear Bandits},
+  author={Cheng, Ji and Xue, Bo and Yi, Jiaxiang and Zhang, Qingfu},
+  booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume={38},
+  pages={11489-11497},
+  year={2024}
+}
 ```
