@@ -1,6 +1,6 @@
 # Multi-objective Stochastic Linear Bandits
 
-Code for AAAI2024 Paper: Hierarchize Pareto Dominance in Multi-objective Stochastic Linear Bandits
+Code for AAAI2024 Paper: [*Hierarchize Pareto Dominance in Multi-objective Stochastic Linear Bandits*](https://ojs.aaai.org/index.php/AAAI/article/view/29030)
 
 The repository contains: 
 - <code>**oracle.py**</code>, simulators for multi-objective stochastic linear bandits. To apply to real-world dataset, rewrite methods *observe_context* and *expected_reward* for your subclass of the base class *mo_contextual_bandit*.
@@ -11,7 +11,7 @@ The repository contains:
 
 If you find our work helpful, please consider citing our paper:
 ```
-@inproceedings{chengHierarchize,
+@inproceedings{cheng2024hierarchize,
   title={Hierarchize Pareto Dominance in Multi-Objective Stochastic Linear Bandits},
   author={Cheng, Ji and Xue, Bo and Yi, Jiaxiang and Zhang, Qingfu},
   booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
